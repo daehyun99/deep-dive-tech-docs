@@ -11,8 +11,8 @@
 
 ## 번역 및 공부
 - 브랜치 생성한 후 본인 폴더 하위에 파일 만들어서 번역
-- 브랜치 규칙: {이름 이니셜}-주제
-  - 예시: kyj-spring-transaction
+- 브랜치 규칙: {이름 이니셜}/주제
+  - 예시: kyj/spring-transaction
 - 커밋: {이름 이니셜}: 문서내용
   - 예시: kyj:spring transaction
 - 파일명은 자유
