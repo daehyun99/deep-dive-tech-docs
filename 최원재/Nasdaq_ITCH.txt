@@ -1,0 +1,176 @@
+soupbintcp.pdf
+
+---
+
+### 1. SoupBinTCP 란 무엇인가?
+
+Client ↔ Server real-time 으로 통신할 수 있게 만들어놓은 nasdaq protocol 이고, TCP/IP Socket 을 기반해서 만들어졌다. 
+
+### 2. TCP 란 무엇인가?
+
+TCP 는 같은 연결 안에서, ACK, 재전송, 순서 보장을 제공한다. 하지만 ACK 는 신경 안 써서, 패킷이 유실될 수 있다. 
+
+예를 들어서, Server → Client 에 100, 101, 102, 103, … 이렇게 보내는데 Client 가 102 받기 전에 연결이 끊어졌다고 하면, Server 는 104 부터 보낼 수 있다.
+
+SoupBinTCP 는 그와 다르게 Client 의 last sequence 를 확인해, 거기서부터 다시 재전송한다.
+
+### 2-1) TCP/IP 연결이란 무엇인가?
+
+ 
+
+```cpp
+Client (User) --------- TCP/IP Connection -------- Server (Nasdaq)
+```
+
+```cpp
+Data Flow on the internet
+
+Application -> TCP -> IP -> Ethernet 
+```
+
+Application: SoupBinTCP, HTTP, FIX, SSH 등.. 
+
+TCP: 데이터를 순서대로, 빠짐없이 전달
+
+IP: 어디로 보낼지 결정
+
+### 2-2) 3-Way handshake
+
+TCP Connection 을 만들기 위해 Client/Server 가 서로 준비 상태를 확인하는 과정 
+
+1. SYN: Synchronize, Client 가 Server 에게 연결하고 싶다고 request, 자신의 초기 sequence number 전달
+2. SYN+ACK:  Server 도 자신의 초기 sequence number (500) 을 보냄, ACK = 101 도 보냄, 전에 client 의 100 을 받았기 때문에, 다음 숫자인 101을 보낸다. 
+3. ACK: Client 가 500 을 받았다는 signal 로 501 을 server 에게 보낸다. 
+
+### 2-3) SoupBinTCP
+
+```cpp
+ITCH Message -> SoupBinTCP -> TCP Connection -> IP -> Ethernet
+```
+
+### 3. Session 이란 무엇인가?
+
+여러 Connection 에 걸쳐 유지되는 논리적인 상태 
+
+Connection #1 
+
+```cpp
+Login 
+ITCH #100
+ITCH #101
+ITCH #102
+(lost)
+```
+
+Connection #2  
+
+```cpp
+Login
+Last Sequence = 102
+ITCH #103
+ITCH #104
+```
+
+TCP Connection 은 2개지만, 100→101→102 … 이렇게 하나의 연속된 데이터 흐름으로 받았으므로, 하나의 Session 이라고 한다. 
+
+### 3-1) Socket 이란 무엇인가?
+
+프로그램이 네트워크를 통해 데이터를 주고받기 위한 입구 
+
+각 소켓은 IP 주소, Port 를 가지고 있다. 
+
+```cpp
+int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+connect(sockfd, ---);
+send(sockfd, ...);
+recv(sockfd, ...);
+```
+
+### 4. SoupBinTCP 논리 패킷
+
+- Packet 에 들어있는 정보
+    - 2 byte 크기의 length 필드가 있고, big-endian 형식으로 저장된다.
+        - size[1byte header + 가변길이의 페이로드]가 들어가 있다.
+    - 1byte 헤더 (패킷 타입 명시)
+    - 가변 길이의 페이로드
+
+### 5. 프로토콜 흐름
+
+1. Client 가 TCP/IP Socket 을 연다; 로그인 요청 패킷 전송
+2. 로그인이 유효하다면, Server 가 Login Accepted 패킷을 그리고 **연속적 데이터 패킷**을 보내기 시작한다. 
+3. 1 과 2 연결은 TCP/IP 소켓 연결이 끊어지기 전까지 계속된다.
+
+1. 일반적으로, server 에 처음 로그인한다면, client 는 Requested Sequence Number 를 1로 설정하고, Requested Session Field 를 공백으로 남겨둔다. 
+    1. Login Request Packet : [Requested Sequence Number = 1, Requested Session Field = null]
+2. Sequenced Data Packet 을 받을때마다, client 는 local sequence number 를 1씩 증가한다, 이는 처음에 1로 설정되어 있다. (not 0)
+
+1. 만약 TCP/IP 연결이 끊어진다면, client 는 다시 server 로 재 로그인해서, 현재 세션과 다음 expected sequence number 를 보낸다. 
+2. 이를 보냄으로서, client 는 언제나 연속된 메시지를 보장받을 수 있다. 
+3. 또한, Login Accepted Packet 을 받은 후,ㅡ Client 는 비연속적 (unsequenced) 데이터 패킷을 언제든지 보낼 수 있다. 하지만, TCP/IP 소켓 연결이 끊어지면, 전송이 안될 수도 있다. 
+
+### 6. SoupBinTCP Heartbeat
+
+링크 실패를 빠르게 탐지하기 위한 logical heartbeat packet. 서버가, 1초 이상 어떤 데이터도 보내지 않으면 Server Heartbeat packet 을 보내야 한다. 그럼으로서, Client 가 정규적으로 data 를 받고 있음을 나타낸다. 만약, data 나 server heartbeat packet 아무것도 받지 않았다면, Link 가 끊어졌음을 시사하고, 새로운 TCP/IP 소켓으로 재연결을 시도한다. 
+
+### 7. End of Session Maker
+
+연결이 끊기면 Server 가 End of Session Message 를 보낸다. 이 세선에서 더 이상 메시지가 없다는 걸 뜻함.
+
+Client 는 새로운 Session ID 나, black Session ID 를 다시 보내야 한다.
+
+### 8. 데이터 타입
+
+ASCII byte, Integer 는 바이너리 big-endian 을 사용
+
+### 9. SoupBinTCP 패킷 타입
+
+9-1) 디버깅 패킷
+
+offset[0:2] = 이 필드부터 다음패킷전까지의 바이트수
+
+offset[2:3] = 디버그 패킷임을 나타내는 문자
+
+offset[3:N] = 페이로드 (실제 디버깅 문자를 넣음)
+
+9-2) Login Accepted Packet
+
+9-3) Login Rejected Packet
+
+9-4) Sequenced Data Packet
+
+9-5) Server Hearbeat Packet
+
+9-6) End of Session Packet
+
+9-7) Login Request Packet
+
+9-8) Unsequenced Data packet; TCP/IP 통신중에 소실될 수 있으며, 상위 차원의 프로토콜이 소실건을 관리한다.
+
+9-9) Client Heartbeat packet
+
+9-10) Logout request packet 
+
+### 10) 나스닥 압축 데이터 피드 옵션
+
+75% 가량의 네트워크 대역폭을 줄임과 동시에 빠르고, 안정적인 서비스를 제공할 수 있다. 기본적으로 SoupTCP 프로토콜을 기준으로 만들어졌으며, zlib deflator/inflator 사용
+
+itchcompression.pdf
+
+### 11) MoldUDP64
+
+moldudp64.pdf
+
+- MoldeUDP64 란 무엇인가?
+    - 한 곳이 데이터를 보내고, 대다수가 그 데이터를 받는 시나리오에서 효율적이고, 확장 가능한 네트워크 프로토콜
+
+---
+
+### 새로운 단어
+
+opaque: 불투명한 
+
+Compress: 압축된
+
+deflator:  원본 데이터를 압축
+
+inflator:  압축된 데이터를 풀어서 원래 데이터로 복원
